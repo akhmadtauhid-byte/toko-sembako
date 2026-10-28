@@ -484,12 +484,15 @@ PAGES.riwayat = async function () {
 };
 async function loadRiwayat() {
   const rows = await api('listPenjualan', { dari: v('rd'), sampai: v('rs') });
+  window.__rw = rows;
   const tot = rows.filter(r => r.status === 'selesai').reduce((a, r) => a + r.total, 0);
-  $('rh').innerHTML = `<div class="muted" style="margin-bottom:6px">${rows.length} nota · Total (tidak termasuk void): <b>${rp(tot)}</b></div>
+  const nVoid = rows.filter(r => r.status === 'void').length;
+  $('rh').innerHTML = `<div class="row" style="margin-bottom:6px;justify-content:space-between"><div class="muted">${rows.length} nota · Total (tidak termasuk void): <b>${rp(tot)}</b></div>
+  ${isAdmin() && nVoid ? `<button class="btn sm dan" onclick="hapusSemuaVoid()">Hapus ${nVoid} nota void</button>` : ''}</div>
   <div class="tw"><table><tr><th>No Nota</th><th>Waktu</th><th>Kasir</th><th>Pelanggan</th><th class="r">Total</th><th>Metode</th><th>Status</th><th></th></tr>
   ${rows.map(r => `<tr><td>${esc(r.noNota)}</td><td>${fmtTgl(r.tanggal)}</td><td>${esc(r.kasirNama)}</td><td>${esc(r.pelangganNama || 'Umum')}</td><td class="r">${rp(r.total)}</td><td><span class="tag">${esc(r.metode)}</span></td>
   <td><span class="tag ${r.status === 'selesai' ? 'ok' : 'bad'}">${esc(r.status)}</span></td>
-  <td><button class="btn sm" onclick="lihatNota('${r.id}')">Lihat</button> <button class="btn sm" onclick="printNota('${r.id}')">🖨️</button>${isAdmin() && r.status === 'selesai' ? ` <button class="btn sm dan" onclick="voidNota('${r.id}')">Void</button>` : ''}</td></tr>`).join('') || '<tr><td colspan=8 class="c muted">Tidak ada transaksi</td></tr>'}
+  <td><button class="btn sm" onclick="lihatNota('${r.id}')">Lihat</button> <button class="btn sm" onclick="printNota('${r.id}')">🖨️</button>${isAdmin() && r.status === 'selesai' ? ` <button class="btn sm dan" onclick="voidNota('${r.id}')">Void</button>` : ''}${isAdmin() && r.status === 'void' ? ` <button class="btn sm dan" onclick="hapusNota('${r.id}')">Hapus</button>` : ''}</td></tr>`).join('') || '<tr><td colspan=8 class="c muted">Tidak ada transaksi</td></tr>'}
   </table></div>`;
 }
 async function lihatNota(id) {
@@ -502,6 +505,17 @@ async function lihatNota(id) {
 async function voidNota(id) {
   const alasan = prompt('Alasan membatalkan nota ini? (stok akan dikembalikan)'); if (alasan === null) return;
   try { await api('voidPenjualan', { id, alasan }); await loadAll(); toast('Nota dibatalkan'); loadRiwayat(); } catch (e) { toast(e.message, 'err'); }
+}
+
+async function hapusNota(id) {
+  if (!confirm('Hapus permanen nota void ini?\nData nota akan hilang dari Sheets dan tidak dapat dikembalikan.')) return;
+  try { await api('hapusPenjualan', { id }); toast('Nota dihapus'); loadRiwayat(); } catch (e) { toast(e.message, 'err'); }
+}
+async function hapusSemuaVoid() {
+  const ids = (window.__rw || []).filter(r => r.status === 'void').map(r => r.id);
+  if (!ids.length) return;
+  if (!confirm('Hapus permanen ' + ids.length + ' nota void pada periode ini?\nTidak dapat dikembalikan.')) return;
+  try { const r = await api('hapusPenjualan', { ids }); toast(r.dihapus + ' nota dihapus'); loadRiwayat(); } catch (e) { toast(e.message, 'err'); }
 }
 
 /* ============================ Produk ============================ */
@@ -519,7 +533,7 @@ function renderProduk() {
   ${l.map(p => { const mg = p.hargaJual > 0 ? (p.hargaJual - p.hargaBeli) / p.hargaJual * 100 : 0; return `<tr style="${p.aktif ? '' : 'opacity:.5'}"><td>${esc(p.barcode)}</td><td><b>${esc(p.nama)}</b></td><td>${esc(p.kategori)}</td><td>${esc(p.satuan)}</td>
   <td class="r">${nf.format(p.hargaBeli)}</td><td class="r">${nf.format(p.hargaJual)}</td><td class="r">${p.hargaGrosir > 0 ? nf.format(p.hargaGrosir) + ' (≥' + nf.format(p.minGrosir) + ')' : '-'}</td>
   <td class="r ${mg < 5 ? 'red' : ''}">${mg.toFixed(1)}%</td><td class="r ${p.stok <= p.stokMin ? 'red b' : ''}">${nf.format(p.stok)}</td>
-  <td><button class="btn sm" onclick="formProduk('${p.id}')">Edit</button></td></tr>`; }).join('') || '<tr><td colspan=10 class="c muted">Belum ada produk</td></tr>'}</table></div>`;
+  <td><button class="btn sm" onclick="formProduk('${p.id}')">Edit</button> <button class="btn sm dan" onclick="hapusProduk('${p.id}')">Hapus</button></td></tr>`; }).join('') || '<tr><td colspan=10 class="c muted">Belum ada produk</td></tr>'}</table></div>`;
 }
 function formProduk(id) {
   const p = id ? prodById(id) : { aktif: 1, satuan: 'pcs', stokMin: 5, minGrosir: 0, hargaGrosir: 0, hargaBeli: 0, hargaJual: 0, stok: 0, barcode: '', nama: '', kategori: '' };
@@ -542,6 +556,21 @@ async function saveProduk(id) {
     const d = { id: id || undefined, barcode: v('f_bc'), nama: v('f_nm'), kategori: v('f_kt'), satuan: v('f_sa'), hargaBeli: num(v('f_hb')), hargaJual: num(v('f_hj')), hargaGrosir: num(v('f_hg')), minGrosir: num(v('f_mg')), stokMin: num(v('f_sm')) };
     if (id) d.aktif = $('f_ak').checked ? 1 : 0; else d.stok = num(v('f_st'));
     const p = await api('saveProduk', d); upsert(S.produk, p); closeModal(); toast('Produk disimpan'); renderProduk();
+  } catch (e) { toast(e.message, 'err'); }
+}
+
+async function hapusProduk(id) {
+  const p = prodById(id); if (!p) return;
+  if (!confirm('Hapus permanen produk "' + p.nama + '"?\nTindakan ini tidak dapat dibatalkan.')) return;
+  try {
+    try {
+      await api('hapusProduk', { id });
+    } catch (e) {
+      if (!/^RIWAYAT:/.test(e.message)) throw e;
+      if (!confirm('Produk ini sudah punya riwayat transaksi.\n\nJika dihapus, nota lama tetap tersimpan tetapi produk hilang dari daftar, stok, dan kategori laporan.\nSaran: gunakan Edit lalu nonaktifkan produk bila hanya tidak dijual lagi.\n\nTetap hapus permanen?')) return;
+      await api('hapusProduk', { id, paksa: true });
+    }
+    S.produk = S.produk.filter(x => x.id !== id); toast('Produk dihapus'); renderProduk();
   } catch (e) { toast(e.message, 'err'); }
 }
 
